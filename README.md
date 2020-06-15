@@ -20,15 +20,17 @@ This crate doesn't implements:
 
 ## TODO
 
-* [] Tests
+* [ ] Tests
 
-* [] Turn this crate into a library
+* [ ] Add support for precompiles 1, 2, 3, and 4
 
-* [] Publish it to crates.io
+* [ ] Turn this crate into a library
 
-* [] Create wasm bindings and publish an npm package
+* [ ] Publish it to crates.io
 
-* [] Create an N-API bindings and publish an npm package
+* [ ] Create wasm bindings and publish an npm package
+
+* [ ] Create an N-API bindings and publish an npm package
 
 ## License
 
