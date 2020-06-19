@@ -20,8 +20,6 @@ This crate doesn't implements:
 
 ## TODO
 
-* [ ] Add support for precompiles 1, 2, 3, and 4
-
 * [ ] Publish it to crates.io
 
 * [ ] Create wasm bindings and publish an npm package
