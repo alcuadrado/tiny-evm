@@ -29,7 +29,7 @@ pub struct BlockContext {
     pub coinbase_address: Address,
     pub timestamp: u32,
     pub number: u32,
-    pub gas_limit: u32,
+    pub gas_limit: U256,
     pub difficulty: u32,
     pub chain_id: u32,
 }
@@ -40,7 +40,7 @@ impl Default for BlockContext {
             coinbase_address: Address::zero(),
             timestamp: 0,
             number: 0,
-            gas_limit: 0,
+            gas_limit: U256::zero(),
             difficulty: 0,
             chain_id: 0,
         }

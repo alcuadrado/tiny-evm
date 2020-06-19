@@ -20,11 +20,7 @@ This crate doesn't implements:
 
 ## TODO
 
-* [ ] Tests
-
 * [ ] Add support for precompiles 1, 2, 3, and 4
-
-* [ ] Turn this crate into a library
 
 * [ ] Publish it to crates.io
 

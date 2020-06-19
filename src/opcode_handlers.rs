@@ -3,12 +3,12 @@ use crate::execution_error::ExecutionError;
 use crate::opcodes::Opcode;
 
 use crate::execution_error::ExecutionError::{
-    InvalidJump, InvalidOpcode, Revert, UnsupportedOpcode,
+    InvalidJump, InvalidOpcode, OutOfGas, Revert, UnsupportedOpcode,
 };
 
 use crate::context::{BlockContext, CallContext};
 use crate::i256::{Sign, I256};
-use crate::memory::Memory;
+use crate::memory::{Memory, MEMORY_LIMIT};
 use crate::stack::Stack;
 use crate::vm::VmState;
 use ethereum_types::{Address, U256, U512};
@@ -38,7 +38,7 @@ pub fn execute_opcode(
             let u0 = vm_state.stack.pop()?;
             let u1 = vm_state.stack.pop()?;
 
-            let result = u0 + u1;
+            let (result, _) = u0.overflowing_add(u1);
 
             vm_state.stack.push(result)?;
 
@@ -48,7 +48,7 @@ pub fn execute_opcode(
             let u0 = vm_state.stack.pop()?;
             let u1 = vm_state.stack.pop()?;
 
-            let result = u0 * u1;
+            let (result, _) = u0.overflowing_mul(u1);
 
             vm_state.stack.push(result)?;
 
@@ -58,7 +58,7 @@ pub fn execute_opcode(
             let u0 = vm_state.stack.pop()?;
             let u1 = vm_state.stack.pop()?;
 
-            let result = u0 - u1;
+            let (result, _) = u0.overflowing_sub(u1);
 
             vm_state.stack.push(result)?;
 
@@ -161,7 +161,7 @@ pub fn execute_opcode(
             let u0 = vm_state.stack.pop()?;
             let u1 = vm_state.stack.pop()?;
 
-            let result = u0.pow(u1);
+            let (result, _) = u0.overflowing_pow(u1);
 
             vm_state.stack.push(result)?;
 
@@ -375,16 +375,29 @@ pub fn execute_opcode(
             let u0 = vm_state.stack.pop()?;
             let u1 = vm_state.stack.pop()?;
 
-            // TODO: These can overflow
+            ensure_offset_and_length_fit_usize(u0, u1)?;
             let offset = u0.as_usize();
             let length = u1.as_usize();
 
-            let data = vm_state.memory.read(offset, length);
-
             let mut keccak = Keccak256::new();
-            keccak
-                .write(data)
-                .expect("Keccak's write should never fail");
+
+            if offset >= vm_state.memory.size() {
+                if length >= MEMORY_LIMIT {
+                    return Err(OutOfGas);
+                }
+
+                let data = vec![0; length];
+
+                keccak
+                    .write(data.as_slice())
+                    .expect("Keccak's write should never fail");
+            } else {
+                let data = vm_state.memory.read(offset, length)?;
+                keccak
+                    .write(data)
+                    .expect("Keccak's write should never fail");
+            };
+
             let hash = keccak.finalize();
 
             let result = U256::from(hash.as_slice());
@@ -438,11 +451,12 @@ pub fn execute_opcode(
         Opcode::CALLDATALOAD => {
             let u0 = vm_state.stack.pop()?;
 
-            // TODO: This can overflow. OGG in that case?
-            let u0_usize = u0.as_usize();
-
-            let data = get_slice(call_context.calldata, u0_usize, 32);
-            let value = U256::from(data);
+            let value = if u0 > U256::from(usize::max_value()) {
+                U256::zero()
+            } else {
+                let data = get_slice(call_context.calldata, u0.as_usize(), 32);
+                U256::from(data)
+            };
 
             vm_state.stack.push(value)?;
 
@@ -552,9 +566,10 @@ pub fn execute_opcode(
         Opcode::MLOAD => {
             let u0 = vm_state.stack.pop()?;
 
-            // TODO: This can overflow.
+            ensure_fits_usize(u0)?;
             let offset = u0.as_usize();
-            let data = vm_state.memory.read(offset, 32);
+
+            let data = vm_state.memory.read(offset, 32)?;
             let value = U256::from(data);
 
             vm_state.stack.push(value)?;
@@ -568,8 +583,8 @@ pub fn execute_opcode(
             let mut bytes = [0; 32];
             u1.to_big_endian(&mut bytes);
 
-            // TODO: This can overflow. What we should probably do is OOG
-            vm_state.memory.write(u0.as_usize(), 32, &bytes);
+            ensure_fits_usize(u0)?;
+            vm_state.memory.write(u0.as_usize(), 32, &bytes)?;
 
             Ok(Running)
         }
@@ -579,13 +594,29 @@ pub fn execute_opcode(
 
             let byte = u1.byte(0);
 
-            // TODO: This can overflow. What we should probably do is OOG
-            vm_state.memory.write(u0.as_usize(), 1, &[byte]);
+            ensure_fits_usize(u0)?;
+            vm_state.memory.write(u0.as_usize(), 1, &[byte])?;
 
             Ok(Running)
         }
-        Opcode::SLOAD => unsupported_opcode_handler(Opcode::SLOAD),
-        Opcode::SSTORE => unsupported_opcode_handler(Opcode::SSTORE),
+        Opcode::SLOAD => {
+            let u0 = vm_state.stack.pop()?;
+
+            let default = U256::zero();
+            let value = vm_state.storage.get(&u0).unwrap_or(&default);
+
+            vm_state.stack.push(*value)?;
+
+            Ok(Running)
+        }
+        Opcode::SSTORE => {
+            let u0 = vm_state.stack.pop()?;
+            let u1 = vm_state.stack.pop()?;
+
+            vm_state.storage.insert(u0, u1);
+
+            Ok(Running)
+        }
         Opcode::JUMP => {
             let u0 = vm_state.stack.pop()?;
 
@@ -772,11 +803,11 @@ pub fn execute_opcode(
             let u0 = vm_state.stack.pop()?;
             let u1 = vm_state.stack.pop()?;
 
-            // TODO: These can overflow
+            ensure_offset_and_length_fit_usize(u0, u1)?;
             let offset = u0.as_usize();
             let length = u1.as_usize();
 
-            let data = vm_state.memory.read(offset, length);
+            let data = vm_state.memory.read(offset, length)?;
 
             vm_state.return_data.extend_from_slice(data);
 
@@ -795,18 +826,18 @@ pub fn execute_opcode(
             let u0 = vm_state.stack.pop()?;
             let u1 = vm_state.stack.pop()?;
 
-            // TODO: These can overflow
+            ensure_offset_and_length_fit_usize(u0, u1)?;
             let offset = u0.as_usize();
             let length = u1.as_usize();
 
-            let data = vm_state.memory.read(offset, length);
+            let data = vm_state.memory.read(offset, length)?;
 
             vm_state.return_data.extend_from_slice(data);
 
             Err(Revert)
         }
         Opcode::INVALID => Err(InvalidOpcode),
-        Opcode::SELFDESTRUCT => unsupported_opcode_handler(Opcode::SELFDESTRUCT),
+        Opcode::SELFDESTRUCT => Ok(Halted),
     }
 }
 
@@ -870,14 +901,42 @@ fn data_copy_handler(stack: &mut Stack, memory: &mut Memory, data: &[u8]) -> Ste
     let u1 = stack.pop()?;
     let u2 = stack.pop()?;
 
-    // TODO: These can overflow. OGG in that case?
+    ensure_fits_usize(u0)?;
+
     let u0_usize = u0.as_usize();
-    let u1_usize = u1.as_usize();
     let u2_usize = u2.as_usize();
 
-    let data = get_slice(data, u1_usize, u2_usize);
+    let data = if u1 > U256::from(usize::max_value()) {
+        // We don't really need the data here, we use an empty slice
+        // and write will take care of this
+        &[]
+    } else {
+        let u1_usize = u1.as_usize();
+        ensure_offset_and_length_fit_usize(u1, u2)?;
 
-    memory.write(u0_usize, u2_usize, data);
+        get_slice(data, u1_usize, u2_usize)
+    };
+
+    memory.write(u0_usize, u2_usize, data)?;
 
     Ok(Running)
+}
+
+fn ensure_offset_and_length_fit_usize(offset: U256, length: U256) -> Result<(), ExecutionError> {
+    let (size, overflow) = offset.overflowing_add(length);
+    if overflow {
+        return Err(OutOfGas);
+    }
+
+    ensure_fits_usize(size)?;
+
+    Ok(())
+}
+
+fn ensure_fits_usize(number: U256) -> Result<(), ExecutionError> {
+    if number > U256::from(usize::max_value()) {
+        return Err(OutOfGas);
+    }
+
+    Ok(())
 }

@@ -8,6 +8,7 @@ pub enum ExecutionError {
     InvalidJump,
     Revert,
     InvalidOpcode,
+    OutOfGas,
     UnsupportedOpcode(Opcode),
 }
 

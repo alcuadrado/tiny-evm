@@ -11,10 +11,6 @@ pub struct Stack {
 const MAX_STACK_DEPTH: usize = 1024;
 
 impl Stack {
-    pub fn new() -> Stack {
-        Stack { stack: Vec::new() }
-    }
-
     pub fn with_capacity(capacity: usize) -> Stack {
         Stack {
             stack: Vec::with_capacity(capacity),
